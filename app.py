@@ -1,25 +1,14 @@
-from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.middleware.cors import CORSMiddleware
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 
-app = FastAPI()
-
-# -- CORS: libere SOMENTE o domínio do seu front:
+app = Flask(__name__)
 FRONT_URL = "https://volxo-ad-insight.onrender.com"
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[FRONT_URL],
-    allow_methods=["POST", "OPTIONS"],
-    allow_headers=["*"],
-    allow_credentials=False,
-)
+CORS(app, resources={r"/api/*": {"origins": FRONT_URL}})
 
 @app.post("/api/generate-report")
-async def generate_report(
-    channels: str = Form(...),
-    customInstructions: str | None = Form(None),
-    files: list[UploadFile] = File(default=[]),
-):
-    # TODO: processe files / channels e gere o conteúdo
-    content = "Seu relatório gerado aqui..."
-    return {"content": content}
+def generate_report():
+    channels = request.form.get("channels", "")
+    custom = request.form.get("customInstructions")
+    files = request.files.getlist("files")
+    # TODO: processe e gere o conteúdo
+    return jsonify({"content": "Seu relatório gerado aqui..."})
