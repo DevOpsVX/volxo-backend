@@ -1,78 +1,71 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import os
-from openai import OpenAI
+import os, json
 
 app = Flask(__name__)
-# ajuste o domínio do seu front aqui:
-FRONT_URL = os.environ.get("FRONT_URL", "https://volxo-ad-insight.onrender.com")
-CORS(app, resources={r"/api/*": {"origins": [FRONT_URL]}})
+FRONT_URL = os.getenv("FRONT_URL", "*")
+CORS(app, resources={r"/api/*": {"origins": FRONT_URL}})
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-
-SYSTEM_PROMPT = (
-    "Você é um analista de dados sênior, gestor de tráfego (Meta/Google Ads) sênior e "
-    "copywriter experiente. Produza um texto voltado para o CLIENTE, claro e didático, "
-    "com tom otimista (sem dizer que é otimista). Explique sucintamente as métricas, "
-    "faça comparações entre campanhas quando útil, e encerre com próximos passos práticos. "
-    "Evite jargões excessivos. Use bullet points quando ajudar a leitura."
-)
-
-@app.post("/api/analyze")
-def analyze():
-    data = request.get_json(force=True)
-
-    brand = data.get("brand", "Marca")
-    channel = data.get("channel", "meta")
-    period = data.get("period", "")
-    kpis = data.get("kpis", {})
-    table = data.get("table", [])
-
-    # resumo estruturado para o prompt
-    summary = {
-        "brand": brand,
-        "channel": channel,
-        "period": period,
-        "kpis": kpis,
-        "table": table
-    }
-
-    # fallback se não houver chave
-    if client is None:
-        text = (
-            f"### Visão Geral ({brand})\n"
-            f"- Canal: {channel.upper()} • Período: {period}\n"
-            f"- KPIs: gasto {kpis.get('totalSpendBRL')}, alcance {kpis.get('totalReach')}, "
-            f"impressões {kpis.get('totalImpressions')}, resultados {kpis.get('totalResults')}.\n\n"
-            "### Oportunidades\n"
-            "- Redirecionar verba para campanhas com melhor CPA e maior volume de resultados.\n"
-            "- Testar criativos e chamadas orientadas à conversão.\n"
-            "- Ampliar cobertura em públicos quentes para escalar com eficiência."
-        )
-        return jsonify({"content": text})
-
-    # chamada à OpenAI (modelo de texto)
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content":
-            "Gere um texto para o cliente com base nos dados a seguir (JSON). "
-            "Explique o que significam as métricas, destaque pontos fortes, "
-            "faça comparações úteis e escreva recomendações práticas ao final.\n\n"
-            f"Dados:\n{summary}"
-        }
-    ]
-    try:
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            temperature=0.4,
-        )
-        content = resp.choices[0].message.content
-        return jsonify({"content": content})
-    except Exception as e:
-        return jsonify({"content": f"Não foi possível gerar a análise automática agora. {e}"}), 200
-
-@app.get("/health")
+@app.get("/api/health")
 def health():
-    return jsonify({"ok": True})
+    return {"ok": True}
+
+@app.post("/api/generate-report")
+def generate_report():
+    """
+    Espera JSON: {
+      "brand": "Volxo",
+      "periodText": "Últimos 7 dias",
+      "channels": ["meta"],
+      "campaigns": [{ name, spend, impressions, results, ctr, roas, reach, cpa }]
+    }
+    Retorna { "narrative": "..." }
+    """
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        brand = data.get("brand", "Marca")
+        period = data.get("periodText", "período")
+        campaigns = data.get("campaigns", [])
+
+        # Narrativa simples e otimista (fallback no server, sem OpenAI)
+        total_spend = sum(c.get("spend", 0) or 0 for c in campaigns)
+        total_imp = sum(c.get("impressions", 0) or 0 for c in campaigns)
+        total_conv = sum(c.get("results", 0) or 0 for c in campaigns)
+        avg_cpa = (
+            (sum((c.get("cpa") or 0) for c in campaigns) / max(len(campaigns), 1))
+            if campaigns else 0
+        )
+
+        top_by_conv = sorted(campaigns, key=lambda x: x.get("results", 0) or 0, reverse=True)[:3]
+        top_names = ", ".join(c["name"] for c in top_by_conv) or "—"
+
+        narrative = f"""
+# Relatório de Desempenho — {brand}
+_Período: {period}._
+
+**Visão geral.**
+O investimento total foi de **R$ {total_spend:,.2f}**, com **{int(total_imp):,} impressões**
+e **{int(total_conv):,} conversões/resultados**. O CPA médio observado ficou em **R$ {avg_cpa:,.2f}**.
+Mantivemos uma entrega consistente, com potencial para ganho de escala controlada.
+
+**Campanhas em destaque.**
+Entre as campanhas com melhor tração em conversões estão: **{top_names}**.
+Elas apresentam sinais de eficiência que podem ser replicados para ampliar a cobertura.
+
+**Oportunidades e próximos passos.**
+- Realocar verba para os conjuntos com **melhor CPA** e estabilidade de entrega.
+- Testar variações de criativo e chamadas (ênfase em **benefício + urgência leve**).
+- Manter audiência quente ativa e expandir gradativamente públicos semelhantes.
+- Monitorar frequência e CTR para evitar fadiga e preservar a eficiência.
+
+_Resumo otimista:_ estamos no caminho certo. Com pequenos ajustes de orçamento,
+testes estruturados de criativos e foco em públicos de maior propensão, a tendência
+é **crescer com controle de custos**.
+        """.strip()
+
+        return jsonify({"narrative": narrative})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
